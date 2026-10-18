@@ -65,7 +65,7 @@ try {
 
   // What the recorder sees, without the link: the site, the tab title, and which join controls show.
   const seen = async (re) => page.getByText(re).first().isVisible().catch(() => false);
-  log(`page: ${new URL(page.url()).hostname}, title "${(await page.title()).slice(0, 40)}"`);
+  log(`page: ${new URL(page.url()).hostname}`); // never the title: it holds the meeting code
   log(`seen: ready-to-join=${await seen(/ready to join/i)} join-now=${await seen(/join now/i)} ask-to-join=${await seen(/ask to join/i)} your-name=${await seen(/what.s your name/i)} sign-in-button=${await page.getByRole('link', { name: /^sign in$/i }).first().isVisible().catch(() => false)}`);
 
   // Signed out: Google sends the browser to its sign-in page, or Meet asks for a guest name.
