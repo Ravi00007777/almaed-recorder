@@ -90,6 +90,7 @@ try {
     (await leaveButton.isVisible().catch(() => false)) ||
     (!(await waiting()) && (await page.locator('[aria-label*="microphone" i]').count()) > 0 && (await page.locator('[aria-label*="people" i], [aria-label*="participants" i]').count()) > 0);
   const admitBy = Date.now() + 15 * 60e3;
+  const reported = new Set();
   while (!(await inCall())) {
     // Only Meet's own refusal messages (looser words also appear on the normal waiting screen).
     const refused = (await seen(/denied your request/i)) ? 'denied' : (await seen(/you can.t join this (video )?call/i)) ? 'cant-join' : (await seen(/you.ve been removed/i)) ? 'removed' : '';
@@ -97,15 +98,10 @@ try {
       log(`FAILED: never got into the call (${refused || 'not admitted within 15 minutes'})`);
       await finish(5);
     }
-    // "You can't join" also shows while nobody (no host) is in the call yet: ask again shortly.
-    if (refused === 'cant-join') {
-      log('nobody to let it in yet, asking again in 30 s');
-      await sleep(30_000);
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await sleep(6000);
-      const box = page.getByRole('textbox', { name: /your name/i }).first();
-      if (await box.isVisible().catch(() => false)) await box.fill(GUEST_NAME);
-      await clickIf(/ask to join/i);
+    // Say once what Meet shows, then keep waiting: re-asking would cancel the request on the host's side.
+    if (refused && !reported.has(refused)) {
+      reported.add(refused);
+      log(`Meet shows: ${refused}, still waiting`);
     }
     await sleep(3000);
   }
