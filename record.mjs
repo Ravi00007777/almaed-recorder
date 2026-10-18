@@ -50,7 +50,7 @@ async function clickIf(pattern) {
 let ffmpeg;
 async function finish(code) {
   log('leaving');
-  await clickIf(/leave call/i);
+  await page.locator('[aria-label*="leave call" i]').first().click({ timeout: 3000 }).catch(() => {});
   if (ffmpeg) {
     ffmpeg.kill('SIGINT'); // lets ffmpeg close the stream cleanly, so YouTube ends the broadcast
     await sleep(5000);
@@ -86,12 +86,21 @@ try {
   log(joined ? 'joining' : asked ? 'asked to join, waiting for the host to admit' : 'FAILED: no join button found');
   if (!joined && !asked) await finish(4);
 
-  // In the call once the Leave button shows (up to 10 minutes if waiting to be admitted).
-  const inCall = page.getByRole('button', { name: /leave call/i });
-  await inCall.waitFor({ timeout: 10 * 60e3 }).catch(async () => {
-    log(`FAILED: never got into the call (refused=${await seen(/denied|can.t join|not allowed/i)})`);
-    await finish(5);
-  });
+  // In the call: the leave button shows (Meet's label varies, so match it loosely), or the
+  // waiting screen is gone and the call's controls (mic, camera, people) are showing.
+  const leaveButton = page.locator('[aria-label*="leave call" i], [data-tooltip*="leave call" i]').first();
+  const waiting = () => seen(/asking to be let in|ask to join|someone will let you in/i);
+  const inCall = async () =>
+    (await leaveButton.isVisible().catch(() => false)) ||
+    (!(await waiting()) && (await page.locator('[aria-label*="microphone" i]').count()) > 0 && (await page.locator('[aria-label*="people" i], [aria-label*="participants" i]').count()) > 0);
+  const admitBy = Date.now() + 15 * 60e3;
+  while (!(await inCall())) {
+    if (Date.now() > admitBy || (await seen(/denied|can.t join|not allowed|removed/i))) {
+      log(`FAILED: never got into the call (refused=${await seen(/denied|can.t join|not allowed/i)})`);
+      await finish(5);
+    }
+    await sleep(3000);
+  }
   log('in the call');
 
   if (RTMP_URL) {
@@ -121,7 +130,7 @@ try {
       await sleep(1000);
       if (await clickIf(/^admit all$/i)) log('admitted everyone waiting');
     }
-    if (!(await inCall.isVisible().catch(() => false))) {
+    if (!(await inCall())) {
       log('the call ended or the recorder was removed');
       break;
     }
