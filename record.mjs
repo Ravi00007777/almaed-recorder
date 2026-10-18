@@ -71,7 +71,7 @@ try {
   // As a guest, Meet asks for a name first.
   const nameBox = page.getByRole('textbox', { name: /your name/i }).first();
   if (await nameBox.isVisible().catch(() => false)) await nameBox.fill(GUEST_NAME);
-  if (await page.getByText(/you can't join this video call|not allowed to join/i).first().isVisible().catch(() => false)) {
+  if (await seen(/you can.t join this (video )?call/i)) {
     log('FAILED: Meet refused the recorder ("You can\'t join this video call").');
     await finish(3);
   }
@@ -95,8 +95,10 @@ try {
     (!(await waiting()) && (await page.locator('[aria-label*="microphone" i]').count()) > 0 && (await page.locator('[aria-label*="people" i], [aria-label*="participants" i]').count()) > 0);
   const admitBy = Date.now() + 15 * 60e3;
   while (!(await inCall())) {
-    if (Date.now() > admitBy || (await seen(/denied|can.t join|not allowed|removed/i))) {
-      log(`FAILED: never got into the call (refused=${await seen(/denied|can.t join|not allowed/i)})`);
+    // Only Meet's own refusal messages (looser words also appear on the normal waiting screen).
+    const refused = (await seen(/denied your request/i)) ? 'denied' : (await seen(/you can.t join this (video )?call/i)) ? 'cant-join' : (await seen(/you.ve been removed/i)) ? 'removed' : '';
+    if (refused || Date.now() > admitBy) {
+      log(`FAILED: never got into the call (${refused || 'not admitted within 15 minutes'})`);
       await finish(5);
     }
     await sleep(3000);
