@@ -1,10 +1,11 @@
-// Joins a Google Meet as the recorder account, admits people who ask to join, and (when RTMP_URL
-// is set) streams the call's screen and sound to YouTube with ffmpeg. Runs on a GitHub Actions
+// Joins a Google Meet as a guest named "AlmaEd class recording" (the host admits it once), and
+// (when RTMP_URL is set) streams the call's screen and sound to YouTube with ffmpeg. A Google login
+// can't be used here: Google ties it to the computer it was made on, and every runner is new. Runs on a GitHub Actions
 // runner under Xvfb (screen :99) and PulseAudio (sink "rec").
 //
 // The repo is public, so its logs are too: never print the Meet link, the stream URL or cookies.
-// Env: MEET_URL, STORAGE_STATE (base64 of login.mjs's file), MINUTES (how long to stay, max 300),
-// RTMP_URL (optional: rtmps://.../<stream key>).
+// Env: MEET_URL, MINUTES (how long to stay, max 300), RTMP_URL (optional: rtmps://.../<stream key>),
+// GUEST_NAME (optional).
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
@@ -12,7 +13,7 @@ const MEET_URL = process.env.MEET_URL ?? '';
 const MINUTES = Math.min(300, Number(process.env.MINUTES || 5));
 const RTMP_URL = process.env.RTMP_URL ?? '';
 if (!/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/.test(MEET_URL)) throw new Error('MEET_URL is not a Google Meet link.');
-if (!process.env.STORAGE_STATE) throw new Error('STORAGE_STATE is not set.');
+const GUEST_NAME = process.env.GUEST_NAME || 'AlmaEd class recording';
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -31,7 +32,6 @@ const browser = await chromium.launch({
   ],
 });
 const context = await browser.newContext({
-  storageState: JSON.parse(Buffer.from(process.env.STORAGE_STATE, 'base64').toString()),
   viewport: null,
   permissions: ['microphone', 'camera', 'notifications'],
 });
@@ -68,11 +68,9 @@ try {
   log(`page: ${new URL(page.url()).hostname}`); // never the title: it holds the meeting code
   log(`seen: ready-to-join=${await seen(/ready to join/i)} join-now=${await seen(/join now/i)} ask-to-join=${await seen(/ask to join/i)} your-name=${await seen(/what.s your name/i)} sign-in-button=${await page.getByRole('link', { name: /^sign in$/i }).first().isVisible().catch(() => false)}`);
 
-  // Signed out: Google sends the browser to its sign-in page, or Meet asks for a guest name.
-  if (new URL(page.url()).hostname === 'accounts.google.com' || (await seen(/what.s your name/i))) {
-    log('FAILED: the recorder is not signed in (cookies expired or rejected). Run login.mjs again.');
-    await finish(2);
-  }
+  // As a guest, Meet asks for a name first.
+  const nameBox = page.getByRole('textbox', { name: /your name/i }).first();
+  if (await nameBox.isVisible().catch(() => false)) await nameBox.fill(GUEST_NAME);
   if (await page.getByText(/you can't join this video call|not allowed to join/i).first().isVisible().catch(() => false)) {
     log('FAILED: Meet refused the recorder ("You can\'t join this video call").');
     await finish(3);
@@ -85,13 +83,13 @@ try {
 
   const joined = (await clickIf(/^join now$/i)) || (await clickIf(/^join$/i));
   const asked = !joined && (await clickIf(/ask to join/i));
-  log(joined ? 'joining as host/invited' : asked ? 'asked to join, waiting to be admitted' : 'FAILED: no join button found');
+  log(joined ? 'joining' : asked ? 'asked to join, waiting for the host to admit' : 'FAILED: no join button found');
   if (!joined && !asked) await finish(4);
 
   // In the call once the Leave button shows (up to 10 minutes if waiting to be admitted).
   const inCall = page.getByRole('button', { name: /leave call/i });
   await inCall.waitFor({ timeout: 10 * 60e3 }).catch(async () => {
-    log('FAILED: never got into the call');
+    log(`FAILED: never got into the call (refused=${await seen(/denied|can.t join|not allowed/i)})`);
     await finish(5);
   });
   log('in the call');

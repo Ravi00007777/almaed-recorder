@@ -30,7 +30,6 @@ jobs:
       - name: Join and record
         env:
           MEET_URL: ${{ secrets.TEST_MEET_URL }}
-          STORAGE_STATE: ${{ secrets.RECORDER_STORAGE_STATE }}
           RTMP_URL: ${{ secrets.TEST_RTMP_URL }}
           MINUTES: ${{ inputs.minutes }}
           DISPLAY: ':99'
