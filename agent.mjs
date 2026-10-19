@@ -4,7 +4,7 @@
 // signed-in browser profile (two Chromes can't share one profile).
 //
 // Env (/etc/almaed-recorder.env): SITE_URL, RECORDER_SECRET, PROFILE_DIR (the signed-in profile
-// login.sh made). Logs go to journald: job ids only, never Meet links or stream keys.
+// login.sh made), MAX_JOBS (classes recorded at once, default 2: each is a Chrome and an ffmpeg). Logs go to journald: job ids only, never Meet links or stream keys.
 import { spawn, execFileSync } from 'node:child_process';
 import { cpSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,13 +14,17 @@ const SITE_URL = (process.env.SITE_URL ?? '').replace(/\/$/, '');
 const SECRET = process.env.RECORDER_SECRET ?? '';
 const PROFILE_DIR = process.env.PROFILE_DIR ?? '';
 if (!SITE_URL || !SECRET || !PROFILE_DIR) throw new Error('SITE_URL, RECORDER_SECRET and PROFILE_DIR must be set.');
+// ponytail: guessed for the 4-core free VM; measure CPU with real classes and raise it if there's room.
+const MAX_JOBS = Number(process.env.MAX_JOBS ?? 2);
 
 const log = (...a) => console.log(new Date().toISOString().slice(0, 19), ...a);
 const running = new Map(); // job id -> child process
 let nextDisplay = 100;
 
 async function poll() {
-  const res = await fetch(`${SITE_URL}/api/recorder/jobs`, {
+  // Asks even when full: the site alerts admin about a class nobody could take.
+  const slots = Math.max(0, MAX_JOBS - running.size);
+  const res = await fetch(`${SITE_URL}/api/recorder/jobs?slots=${slots}`, {
     headers: { Authorization: `Bearer ${SECRET}` },
     signal: AbortSignal.timeout(50_000),
   });
