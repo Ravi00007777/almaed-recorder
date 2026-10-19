@@ -5,9 +5,10 @@
   "description": "Joins an AlmaEd class on Google Meet as the recorder account and streams it to YouTube.",
   "scripts": {
     "login": "node login.mjs",
-    "record": "node record.mjs"
+    "record": "node record.mjs",
+    "agent": "node agent.mjs"
   },
   "dependencies": {
-    "playwright-core": "1.64.1"
+    "playwright": "1.64.1"
   }
 }

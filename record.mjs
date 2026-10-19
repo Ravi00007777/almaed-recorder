@@ -1,25 +1,31 @@
-// Joins a Google Meet as a guest named "AlmaEd class recording" (the host admits it once), and
-// (when RTMP_URL is set) streams the call's screen and sound to YouTube with ffmpeg. A Google login
-// can't be used here: Google ties it to the computer it was made on, and every runner is new. Runs on a GitHub Actions
-// runner under Xvfb (screen :99) and PulseAudio (sink "rec").
+// Joins a Google Meet and streams the call's screen and sound to YouTube with ffmpeg (RTMP_URL),
+// saving nothing to disk. Two ways to run:
+// - On the AlmaEd Oracle server (agent.mjs): PROFILE_DIR is a copy of the recorder Gmail's signed-in
+//   profile, so it joins as the meeting's host and admits everyone who asks to join.
+// - Without PROFILE_DIR (GitHub test workflow): a guest named GUEST_NAME the host admits.
+// Runs under Xvfb (DISPLAY) with PulseAudio; SINK is this class's own sound sink.
 //
-// The repo is public, so its logs are too: never print the Meet link, the stream URL or cookies.
-// Env: MEET_URL, MINUTES (how long to stay, max 300), RTMP_URL (optional: rtmps://.../<stream key>),
-// GUEST_NAME (optional).
+// Logs may be public: never print the Meet link, the stream URL or cookies.
+// Env: MEET_URL, MINUTES (how long to stay at most, max 330), RTMP_URL, START_AT and ENDS_AT
+// (ISO times: join a few minutes before the start; leave once alone after the end), PROFILE_DIR,
+// SINK (default "rec"), CHROME_CHANNEL ("chrome" to use Google Chrome), GUEST_NAME.
 import { spawn } from 'node:child_process';
-import { chromium } from 'playwright-core';
+import { chromium } from 'playwright';
 
 const MEET_URL = process.env.MEET_URL ?? '';
-const MINUTES = Math.min(300, Number(process.env.MINUTES || 5));
+const MINUTES = Math.min(330, Number(process.env.MINUTES || 5));
 const RTMP_URL = process.env.RTMP_URL ?? '';
 if (!/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/.test(MEET_URL)) throw new Error('MEET_URL is not a Google Meet link.');
 const GUEST_NAME = process.env.GUEST_NAME || 'AlmaEd class recording';
+const SINK = process.env.SINK || 'rec';
+const START_AT = process.env.START_AT ? new Date(process.env.START_AT).getTime() : 0;
+const ENDS_AT = process.env.ENDS_AT ? new Date(process.env.ENDS_AT).getTime() : 0;
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const browser = await chromium.launch({
-  channel: 'chrome',
+const options = {
+  channel: process.env.CHROME_CHANNEL || undefined,
   headless: false, // a real window on the virtual screen: Meet treats headless Chrome as a bot
   ignoreDefaultArgs: ['--enable-automation'],
   args: [
@@ -30,11 +36,13 @@ const browser = await chromium.launch({
     '--window-size=1280,720',
     '--autoplay-policy=no-user-gesture-required',
   ],
-});
-const context = await browser.newContext({
-  viewport: null,
-  permissions: ['microphone', 'camera', 'notifications'],
-});
+  // The browser's sound goes to this class's own sink, which ffmpeg records.
+  env: { ...process.env, PULSE_SINK: SINK },
+};
+const contextOptions = { viewport: null, permissions: ['microphone', 'camera', 'notifications'] };
+const context = process.env.PROFILE_DIR
+  ? await chromium.launchPersistentContext(process.env.PROFILE_DIR, { ...options, ...contextOptions })
+  : await (await chromium.launch(options)).newContext(contextOptions);
 const page = await context.newPage();
 
 // The first visible button whose text or label matches.
@@ -55,8 +63,15 @@ async function finish(code) {
     ffmpeg.kill('SIGINT'); // lets ffmpeg close the stream cleanly, so YouTube ends the broadcast
     await sleep(5000);
   }
-  await browser.close().catch(() => {});
+  await context.close().catch(() => {});
+  await context.browser()?.close().catch(() => {});
   process.exit(code);
+}
+
+// Join a few minutes before the class, not earlier.
+if (START_AT && START_AT - 3 * 60e3 > Date.now()) {
+  log('waiting for the class');
+  await sleep(START_AT - 3 * 60e3 - Date.now());
 }
 
 try {
@@ -111,7 +126,7 @@ try {
     ffmpeg = spawn('ffmpeg', [
       '-loglevel', 'error',
       '-f', 'x11grab', '-video_size', '1280x720', '-framerate', '30', '-i', process.env.DISPLAY || ':99',
-      '-f', 'pulse', '-i', 'rec.monitor',
+      '-f', 'pulse', '-i', `${SINK}.monitor`,
       '-c:v', 'libx264', '-preset', 'veryfast', '-b:v', '2500k', '-maxrate', '2500k', '-bufsize', '5000k',
       '-pix_fmt', 'yuv420p', '-g', '60', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
       '-f', 'flv', RTMP_URL,
@@ -137,6 +152,16 @@ try {
     if (!(await inCall())) {
       log('the call ended or the recorder was removed');
       break;
+    }
+    // After the class's end, leave once everyone else has gone. Meet puts the number of people in
+    // the People button's label; ponytail: unknown count = keep recording until MINUTES runs out.
+    if (ENDS_AT && Date.now() > ENDS_AT) {
+      const label = (await page.locator('[aria-label*="people" i], [aria-label*="everyone" i]').first().getAttribute('aria-label').catch(() => '')) || '';
+      const people = Number(label.match(/\d+/)?.[0] ?? 0);
+      if (people === 1) {
+        log('class over and everyone left');
+        break;
+      }
     }
     await sleep(5000);
   }
